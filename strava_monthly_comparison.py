@@ -36,7 +36,7 @@ REFRESH_TOKEN = os.environ["STRAVA_REFRESH_TOKEN"]
 MONTHS_BACK   = 36  # how many months of history to fetch
 MAX_PER_PAGE  = 100  # Strava max per page
 PACE_FILTER   = 15.0  # drop points with pace > this (min/km) — removes pauses
-CACHE_FILE    = "streams_cache.json"
+CACHE_FILE    = "output/streams_cache.json"
 # ─────────────────────────────────────────────────────────────────────────────
 
 def pace_min_per_km(speed_ms):
