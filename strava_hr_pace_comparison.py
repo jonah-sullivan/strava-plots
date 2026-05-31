@@ -1,7 +1,7 @@
 """
-Strava Monthly Heart Rate Trend
+Strava Weekly Heart Rate Trend
 ---------------------------------
-Fetches ~12 months of running data from Strava and plots monthly avg and
+Fetches ~3 years of running data from Strava and plots weekly avg and
 median heart rate over time.
 
 A downward trend = lower HR over time = improved aerobic fitness.
@@ -90,19 +90,21 @@ while True:
 
 print(f"  Found {len(all_runs)} runs.\n")
 
-# ── 2. Fetch streams for each run and bucket by month ─────────────────────────
+# ── 2. Fetch streams for each run and bucket by week ──────────────────────────
 streams_cache = {}
 if os.path.exists(CACHE_FILE):
     with open(CACHE_FILE) as f:
         streams_cache = json.load(f)
     print(f"Loaded {len(streams_cache)} cached streams from {CACHE_FILE}.\n")
 
-monthly = defaultdict(lambda: {"hr": [], "pace": []})
+weekly = defaultdict(lambda: {"hr": [], "pace": []})
 cache_updated = False
 
 for i, a in enumerate(all_runs):
     date = a["start_date_local"][:10]
-    month = date[:7]  # "YYYY-MM"
+    d = datetime.strptime(date, "%Y-%m-%d")
+    iso = d.isocalendar()
+    week = f"{iso[0]}-W{iso[1]:02d}"  # "YYYY-WXX", uses ISO year for Dec/Jan edge cases
     label = f"{date}  {a['distance']/1000:.1f} km"
     activity_id = str(a["id"])
 
@@ -136,33 +138,33 @@ for i, a in enumerate(all_runs):
         if vel[j] > 0.5:  # moving
             p = pace_min_per_km(vel[j])
             if p <= PACE_FILTER:  # not paused/stopped
-                monthly[month]["hr"].append(hr[j])
-                monthly[month]["pace"].append(p)
+                weekly[week]["hr"].append(hr[j])
+                weekly[week]["pace"].append(p)
 
 if cache_updated:
     with open(CACHE_FILE, "w") as f:
         json.dump(streams_cache, f)
     print(f"Updated cache: {CACHE_FILE}\n")
 
-if not monthly:
+if not weekly:
     print("No data collected. Check your token or date range.")
     exit()
 
 
-## ── 3. Compute 90th percentiles per month ────────────────────────────────────
-months_sorted = sorted(monthly.keys())
+## ── 3. Compute 95th percentiles per week ─────────────────────────────────────
+weeks_sorted = sorted(weekly.keys())
 results = []
-for m in months_sorted:
-    hr_vals = monthly[m]["hr"]
-    pace_vals = monthly[m]["pace"]
-    if len(hr_vals) < 20:
-        print(f"  Skipping {m} — too few data points ({len(hr_vals)})")
+for w in weeks_sorted:
+    hr_vals = weekly[w]["hr"]
+    pace_vals = weekly[w]["pace"]
+    if len(hr_vals) < 150:
+        print(f"  Skipping {w} — too few data points ({len(hr_vals)})")
         continue
     results.append(
         {
-            "month": m,
-            "label": datetime.strptime(m, "%Y-%m").strftime("%b '%y"),
-            "hr_p90": np.percentile(hr_vals, 90),
+            "week": w,
+            "label": f"W{int(w.split('-W')[1])} '{w[:4][2:]}",
+            "hr_p95": np.percentile(hr_vals, 95),
             "pace_p10": np.percentile(pace_vals, 10),  # 10th = fastest end
             "hr_med": np.median(hr_vals),
             "pace_med": np.median(pace_vals),
@@ -173,14 +175,14 @@ for m in months_sorted:
     )
 
 if not results:
-    print("Not enough data per month to plot.")
+    print("Not enough data per week to plot.")
     exit()
 
-print(f"\nMonthly summary ({len(results)} months):")
-print(f"{'Month':<10} {'P90 HR':>8} {'P10 Pace':>10} {'Points':>8}")
+print(f"\nWeekly summary ({len(results)} weeks):")
+print(f"{'Week':<10} {'P95 HR':>8} {'P10 Pace':>10} {'Points':>8}")
 for r in results:
     print(
-        f"  {r['label']:<10} {r['hr_p90']:>6.1f} bpm   "
+        f"  {r['label']:<10} {r['hr_p95']:>6.1f} bpm   "
         f"{fmt_pace(r['pace_p10']):>8} /km   {r['n_pts']:>6,}"
     )
 
@@ -264,19 +266,19 @@ def make_scatter(ax, x_key, y_key, xlabel, ylabel, title, results, colors, sizes
     return xs, ys
 
 
-# ── 5. Two-panel scatter: P90 (top) and Median (bottom) ──────────────────────
-fig, (ax_p90, ax_med) = plt.subplots(2, 1, figsize=(12, 13))
+# ── 5. Two-panel scatter: P95 (top) and Median (bottom) ──────────────────────
+fig, (ax_p95, ax_med) = plt.subplots(2, 1, figsize=(12, 13))
 fig.patch.set_facecolor("#0f1117")
 
 sizes = [max(120, min(500, r["n_pts"] / 8)) for r in results]
 
 make_scatter(
-    ax_p90,
-    x_key="hr_p90",
+    ax_p95,
+    x_key="hr_p95",
     y_key="pace_p10",
-    xlabel="90th Percentile Heart Rate (bpm)",
+    xlabel="95th Percentile Heart Rate (bpm)",
     ylabel="10th Percentile Pace (min/km)",
-    title="P90 HR vs P10 Pace — peak HR at fastest speeds",
+    title="P95 HR vs P10 Pace — peak HR at fastest speeds",
     results=results,
     colors=colors,
     sizes=sizes,
@@ -297,7 +299,7 @@ make_scatter(
 # Shared colorbar
 sm = cm.ScalarMappable(cmap="plasma", norm=mcolors.Normalize(vmin=0, vmax=n - 1))
 sm.set_array([])
-cbar = fig.colorbar(sm, ax=[ax_p90, ax_med], pad=0.02, fraction=0.02)
+cbar = fig.colorbar(sm, ax=[ax_p95, ax_med], pad=0.02, fraction=0.02)
 cbar.set_ticks([0, n - 1])
 cbar.set_ticklabels([results[0]["label"], results[-1]["label"]])
 cbar.ax.yaxis.set_tick_params(color="white")
@@ -314,18 +316,18 @@ fig.suptitle(
 )
 
 fig.savefig(
-    "output/strava_monthly_scatter.png",
+    "output/strava_weekly_scatter.png",
     dpi=180,
     facecolor=fig.get_facecolor(),
     bbox_inches="tight",
 )
-print("\nSaved: output/strava_monthly_scatter.png")
+print("\nSaved: output/strava_weekly_scatter.png")
 
 
-# ── 6. Bar charts: P90 vs Median for HR and Pace ─────────────────────────────
+# ── 6. Bar charts: P95 vs Median for HR and Pace ─────────────────────────────
 fig2, axes = plt.subplots(2, 2, figsize=(16, 8), sharex=True)
 fig2.patch.set_facecolor("#0f1117")
-(ax_hr_p90, ax_hr_med), (ax_pa_p90, ax_pa_med) = axes
+(ax_hr_p95, ax_hr_med), (ax_pa_p95, ax_pa_med) = axes
 
 xlabels = [r["label"] for r in results]
 x = np.arange(len(results))
@@ -343,33 +345,22 @@ def style_bar_ax(ax):
 for ax in axes.flat:
     style_bar_ax(ax)
 
-# HR — P90
-bars = ax_hr_p90.bar(
+# HR — P95
+bars = ax_hr_p95.bar(
     x,
-    [r["hr_p90"] for r in results],
+    [r["hr_p95"] for r in results],
     color=colors,
     edgecolor="#222",
     linewidth=0.5,
     width=bar_w,
 )
-ax_hr_p90.set_ylabel("Heart Rate (bpm)", color="white", fontsize=10)
-ax_hr_p90.set_title(
-    "90th Percentile HR\n(hard efforts ceiling)",
+ax_hr_p95.set_ylabel("Heart Rate (bpm)", color="white", fontsize=10)
+ax_hr_p95.set_title(
+    "95th Percentile HR\n(hard efforts ceiling)",
     color="white",
     fontsize=10,
     fontweight="bold",
 )
-for bar, val in zip(bars, [r["hr_p90"] for r in results]):
-    ax_hr_p90.text(
-        bar.get_x() + bar.get_width() / 2,
-        bar.get_height() + 0.3,
-        f"{val:.0f}",
-        ha="center",
-        va="bottom",
-        color="white",
-        fontsize=7.5,
-    )
-
 # HR — Median
 bars = ax_hr_med.bar(
     x,
@@ -382,19 +373,8 @@ bars = ax_hr_med.bar(
 ax_hr_med.set_title(
     "Median HR\n(typical aerobic effort)", color="white", fontsize=10, fontweight="bold"
 )
-for bar, val in zip(bars, [r["hr_med"] for r in results]):
-    ax_hr_med.text(
-        bar.get_x() + bar.get_width() / 2,
-        bar.get_height() + 0.3,
-        f"{val:.0f}",
-        ha="center",
-        va="bottom",
-        color="white",
-        fontsize=7.5,
-    )
-
-# Pace — P90
-bars = ax_pa_p90.bar(
+# Pace — P95
+bars = ax_pa_p95.bar(
     x,
     [r["pace_p10"] for r in results],
     color=colors,
@@ -402,30 +382,21 @@ bars = ax_pa_p90.bar(
     linewidth=0.5,
     width=bar_w,
 )
-ax_pa_p90.set_ylabel("Pace (min/km)", color="white", fontsize=10)
-ax_pa_p90.set_title(
+ax_pa_p95.set_ylabel("Pace (min/km)", color="white", fontsize=10)
+ax_pa_p95.set_title(
     "10th Percentile Pace\n(fastest efforts)",
     color="white",
     fontsize=10,
     fontweight="bold",
 )
-ax_pa_p90.set_xticks(x)
-ax_pa_p90.set_xticklabels(xlabels, rotation=35, ha="right", color="white", fontsize=8.5)
-y_ticks = ax_pa_p90.get_yticks()
-ax_pa_p90.set_yticks(y_ticks)
-ax_pa_p90.set_yticklabels(
+tick_step = 4
+ax_pa_p95.set_xticks(x[::tick_step])
+ax_pa_p95.set_xticklabels(xlabels[::tick_step], rotation=45, ha="right", color="white", fontsize=8)
+y_ticks = ax_pa_p95.get_yticks()
+ax_pa_p95.set_yticks(y_ticks)
+ax_pa_p95.set_yticklabels(
     [fmt_pace(y) if y > 0 else "" for y in y_ticks], color="white"
 )
-for bar, val in zip(bars, [r["pace_p10"] for r in results]):
-    ax_pa_p90.text(
-        bar.get_x() + bar.get_width() / 2,
-        bar.get_height() + 0.01,
-        fmt_pace(val),
-        ha="center",
-        va="bottom",
-        color="white",
-        fontsize=7.5,
-    )
 
 # Pace — Median
 bars = ax_pa_med.bar(
@@ -439,33 +410,23 @@ bars = ax_pa_med.bar(
 ax_pa_med.set_title(
     "Median Pace\n(typical easy running)", color="white", fontsize=10, fontweight="bold"
 )
-ax_pa_med.set_xticks(x)
-ax_pa_med.set_xticklabels(xlabels, rotation=35, ha="right", color="white", fontsize=8.5)
+ax_pa_med.set_xticks(x[::tick_step])
+ax_pa_med.set_xticklabels(xlabels[::tick_step], rotation=45, ha="right", color="white", fontsize=8)
 y_ticks = ax_pa_med.get_yticks()
 ax_pa_med.set_yticks(y_ticks)
 ax_pa_med.set_yticklabels(
     [fmt_pace(y) if y > 0 else "" for y in y_ticks], color="white"
 )
-for bar, val in zip(bars, [r["pace_med"] for r in results]):
-    ax_pa_med.text(
-        bar.get_x() + bar.get_width() / 2,
-        bar.get_height() + 0.01,
-        fmt_pace(val),
-        ha="center",
-        va="bottom",
-        color="white",
-        fontsize=7.5,
-    )
 
 fig2.suptitle(
-    "Monthly HR & Pace — 90th Percentile vs Median",
+    "Weekly HR & Pace — 95th Percentile vs Median",
     color="white",
     fontsize=13,
     fontweight="bold",
 )
 fig2.tight_layout()
-fig2.savefig("output/strava_monthly_bars.png", dpi=180, facecolor=fig2.get_facecolor())
-print("Saved: output/strava_monthly_bars.png")
+fig2.savefig("output/strava_weekly_bars.png", dpi=180, facecolor=fig2.get_facecolor())
+print("Saved: output/strava_weekly_bars.png")
 
 plt.show()
 print("\nDone!")
